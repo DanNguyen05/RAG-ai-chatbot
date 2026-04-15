@@ -1,0 +1,64 @@
+services:
+
+  # ─── Ollama: chạy LLM và Embedding model cục bộ ────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag_ollama
+    ports:
+      - "11434:11434"           # Expose ra host để debug nếu cần
+    volumes:
+      - ollama_data:/root/.ollama   # Lưu models đã pull, không phải tải lại mỗi lần
+    restart: unless-stopped
+    # Nếu máy có GPU NVIDIA, bỏ comment phần dưới:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ─── Script tự động pull model llama3 khi lần đầu khởi động ────────────────
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: rag_ollama_init
+    depends_on:
+      - ollama
+    entrypoint: >
+      sh -c "
+        echo 'Chờ Ollama khởi động...' &&
+        sleep 5 &&
+        ollama pull llama3 &&
+        echo 'llama3 OK!' &&
+        ollama pull nomic-embed-text &&
+        echo 'nomic-embed-text OK! Tất cả model đã sẵn sàng!'
+      "
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    restart: no   # Chỉ chạy 1 lần
+
+  # ─── Streamlit RAG App ──────────────────────────────────────────────────────
+  streamlit-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./chroma_db:/app/chroma_db   # Dữ liệu vector store lưu ra host
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+# ─── Volumes ────────────────────────────────────────────────────────────────
+volumes:
+  ollama_data:    # Models Ollama (~4GB cho llama3)
